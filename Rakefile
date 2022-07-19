@@ -18,7 +18,7 @@ def compile_sourcefile(dest, src)
 end
 
 def generate_dependency(dest, src)
-  sh 'gcc', '-MM', '-c', src, '-o', dest
+  sh 'gcc', *INCLUDE.map{|x| "-I#{x}" }, '-MM', '-c', src, '-o', dest
 end
 
 desc "Build #{TARGET}"
