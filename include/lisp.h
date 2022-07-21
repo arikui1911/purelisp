@@ -7,6 +7,7 @@
 typedef struct LispValue LispValue;
 
 typedef enum {
+    LISP_EOF,
     LISP_NIL,
     LISP_T,
     LISP_CELL,
@@ -29,6 +30,7 @@ struct LispValue {
     } as;
 };
 
+LispValue lisp_eof_value(void);
 LispValue lisp_t_value(void);
 LispValue lisp_nil_value(void);
 LispValue lisp_int_value(int);
@@ -56,9 +58,10 @@ LispValue lisp_cons(LispState *, LispValue, LispValue);
 
 typedef struct LispReader LispReader;
 
-LispReader *lisp_read_io(LispState *, FILE *, const char *);
-LispReader *lisp_read_string(LispState *, const char *);
+LispReader *lisp_read_io(LispState *, FILE *, const char *filename, const char *prompt);
+LispReader *lisp_read_string(LispState *, const char *, const char *filename);
 void lisp_reader_close(LispReader *);
+LispValue lisp_read(LispReader *);
 
 
 #endif /* _LISP_H_ */

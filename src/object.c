@@ -33,6 +33,8 @@ void value_mark(LispState *lisp, LispValue v) {
     case LISP_CONDITION:
         object_mark(lisp, v.as.obj);
         break;
+    default:
+        break;
     }
 }
 

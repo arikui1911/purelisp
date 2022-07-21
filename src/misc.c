@@ -27,6 +27,7 @@ int lisp_guard(LispState *lisp, LispValue *r, LispValue (*fn)(LispState *)){
         *r = fn(lisp);
         return 0;
     }
+    *r = lisp->last_error;
     return -1;
 }
 

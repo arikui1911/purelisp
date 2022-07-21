@@ -1,39 +1,33 @@
 #include <stdio.h>
 #include <lisp.h>
 
+static LispValue lisp_main(LispState *lisp){
+    LispReader *r;
+    LispValue v;
+
+    r = lisp_read_io(lisp, stdin, "-", "Lisp >");
+    for (;;) {
+        v = lisp_read(r);
+        if (v.type == LISP_EOF) break;
+    }
+    lisp_reader_close(r);
+    return v;
+}
+
 int main(void){
     LispState *lisp;
     LispValue v;
+    int stat;
     
     lisp = lisp_open();
     if (!lisp) return -1;
 
-    v = lisp_string_format(lisp, "<<<%s>>>", "HOGEEEEE");
-
-    lisp_close(lisp);
-    return 0;
-}
-
-void on_bol(void) {
-    fprintf(stderr, "Lisp >");
-}
-
-int main0(void) {
-    int c;
-    int on_eol = 1;
-
-    //whlie ((c = fgetc(stdin)) != EOF) {
-    for (;;) {
-        if (on_eol) {
-            on_eol = 0;
-            on_bol();
-        }
-
-        c = fgetc(stdin);
-        if (c == EOF) break;
-        if (c == '\n') on_eol = 1;
+    stat = lisp_guard(lisp, &v, lisp_main);
+    if (stat != 0) {
+        // error occured
     }
 
-    return 0;
+    lisp_close(lisp);
+    return stat;
 }
 

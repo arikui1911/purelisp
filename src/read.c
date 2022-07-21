@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <ctype.h>
 
 typedef enum {
     TOKEN_EOF,
@@ -39,6 +40,7 @@ struct LispReader {
         FILE *file;
         StringSource string;
     } src;
+    const char *filename;
     int on_eol;
     const char *prompt;
     int buffered_ch;
@@ -52,10 +54,12 @@ struct LispReader {
     int column;
 };
 
-static LispReader *new_reader(LispState *lisp, SourceType src_type){
+static LispReader *new_reader(LispState *lisp, SourceType src_type, const char *src_filename){
     LispReader *r = lmalloc(lisp, sizeof(LispReader));
     r->lisp = lisp;
     r->src_type = src_type;
+    r->filename = src_filename;
+    if (!r->filename) r->filename = "";
     r->on_eol = 1;
     r->prompt = NULL;
     r->has_buffered_ch = 0;
@@ -68,15 +72,15 @@ static LispReader *new_reader(LispState *lisp, SourceType src_type){
     return r;
 }
 
-LispReader *lisp_read_io(LispState *lisp, FILE *src, const char *prompt){
-    LispReader *r = new_reader(lisp, SRC_FILE);
+ LispReader *lisp_read_io(LispState *lisp, FILE *src, const char *filename, const char *prompt){
+    LispReader *r = new_reader(lisp, SRC_FILE, filename);
     r->src.file = src;
     r->prompt = prompt;
     return r;
 }
 
-LispReader *lisp_read_string(LispState *lisp, const char *src){
-    LispReader *r = new_reader(lisp, SRC_STRING);
+LispReader *lisp_read_string(LispState *lisp, const char *src, const char *filename){
+    LispReader *r = new_reader(lisp, SRC_STRING, filename);
     r->src.string.data = src;
     r->src.string.len = strlen(src);
     r->src.string.pos = 0;
@@ -144,6 +148,8 @@ typedef enum {
     STATE_INITIAL,
     STATE_COMMENT,
     STATE_STRING,
+    STATE_STRING_ESC,
+    STATE_ATOM,
 } TokenState;
 
 static Token next_token(LispReader *r){
@@ -162,8 +168,26 @@ static Token next_token(LispReader *r){
                 state = STATE_COMMENT;
                 break;
             case '"':
+                reset_buffer(r);
                 state = STATE_STRING;
+                t.tag = TOKEN_STRING;
                 break;
+            case '(':
+                t.tag = TOKEN_LP;
+                goto LOOP_END;
+            case ')':
+                t.tag = TOKEN_RP;
+                goto LOOP_END;
+            case '.':
+                t.tag = TOKEN_DOT;
+                goto LOOP_END;
+            default:
+                if (!isspace(c)) {
+                    reset_buffer(r);
+                    add_to_buffer(r, toupper(c));
+                    state = STATE_ATOM;
+                    t.tag = TOKEN_ATOM;
+                }
             }
             break;
         case STATE_COMMENT:
@@ -173,10 +197,68 @@ static Token next_token(LispReader *r){
             }
             break;
         case STATE_STRING:
+            switch (c) {
+            case '\\':
+                state = STATE_STRING_ESC;
+                break;
+            case '"':
+                add_to_buffer(r, '\0');
+                state = STATE_INITIAL;
+                goto LOOP_END;
+            case '\n':
+                r->lineno++;
+                add_to_buffer(r, c);
+                break;
+            default:
+                add_to_buffer(r, c);
+            }
+            break;
+        case STATE_STRING_ESC:
+            switch (c) {
+            case '\n':
+                break;
+            case 'n':
+                add_to_buffer(r, '\n');
+                break;
+            case 't':
+                add_to_buffer(r, '\t');
+                break;
+            default:
+                add_to_buffer(r, c);
+            }
+            state = STATE_STRING;
+            break;
+        case STATE_ATOM:
+            switch (c) {
+            case '\n':
+                r->lineno++;
+                goto LOOP_END;
+            case ';':
+            case '"':
+            case '(':
+            case ')':
+                ungetch(r, c);
+                goto LOOP_END;
+            default:
+                if (isspace(c)) goto LOOP_END;
+                add_to_buffer(r, toupper(c));
+            }
             break;
         default:
             assert(0);
         }
+    }
+LOOP_END:
+
+    switch (state) {
+    case STATE_STRING:
+        lisp_error(r->lisp, "%s:%d:%d: unterminated string literal", r->filename, t.lineno, t.column);
+        break;
+    case STATE_ATOM:
+        add_to_buffer(r, '\0');
+        break;
+    default:
+        break;
     }
 
     return t;
@@ -193,5 +275,63 @@ static Token get_token(LispReader *r){
 static void unget_token(LispReader *r, Token t){
     r->buffered_token = t;
     r->has_buffered_token = 1;
+}
+
+static LispValue parse_atom(LispReader *r, Token t){
+    if (strcmp(t.value, "T") == 0) return lisp_t_value();
+    if (strcmp(t.value, "nil") == 0) return lisp_nil_value();
+
+}
+
+static LispValue read_list(LispReader *r){
+    LispValue car;
+    Token t;
+
+    t = get_token(r);
+    switch (t.tag) {
+    case TOKEN_RP:
+        return lisp_nil_value();
+    case TOKEN_EOF:
+        lisp_error(r->lisp, "%s:%d:%d: unterminated list", r->filename, t.lineno, t.column);
+        break;
+    default:
+        break;
+    }
+    unget_token(r, t);
+    car = lisp_read(r);
+
+    t = get_token(r);
+    if (t.tag == TOKEN_DOT) {
+        LispValue cdr = lisp_read(r);
+        t = get_token(r);
+        if (t.tag != TOKEN_RP) {
+            lisp_error(r->lisp, "%s:%d:%d: invalid dot list", r->filename, t.lineno, t.column);
+        }
+        return lisp_cons(r->lisp, car, cdr);
+    }
+    unget_token(r, t);
+
+    return lisp_cons(r->lisp, car, lisp_read(r));
+}
+
+LispValue lisp_read(LispReader *r) {
+    Token t;
+    t = get_token(r);
+    switch (t.tag) {
+    case TOKEN_EOF:
+        return lisp_eof_value();
+    case TOKEN_ATOM:
+        return parse_atom(r, t);
+    case TOKEN_STRING:
+        return lisp_string_new(r->lisp, t.value, strlen(t.value));
+    case TOKEN_LP:
+        return read_list(r);
+    case TOKEN_RP:
+    case TOKEN_DOT:
+        lisp_error(r->lisp, "%s:%d:%d: unexpected token", r->filename, t.lineno, t.column);
+        break;
+    default:
+        assert(0);
+    }
 }
 
